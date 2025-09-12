@@ -1,6 +1,6 @@
-const { TelegramClient } = require('gramjs');
-const { StringSession } = require('gramjs/sessions');
-const templates = require('../config/templates');
+const { TelegramClient } = require('telegram');
+const { StringSession } = require('telegram/sessions');
+const template = require('../config/template');
 
 // --- Configuration for the Spam Check ---
 const MAX_SPAM_CHECK_RETRIES = 5;
@@ -16,6 +16,8 @@ async function checkSpamStatus(account) {
     const session = new StringSession(account.sessionString);
     const client = new TelegramClient(session, parseInt(account.apiId), account.apiHash, {
         connectionRetries: 3,
+        timeout: 30000,
+        retryDelay: 1000
     });
     
     let lastKnownBotReply = "No reply received from SpamInfoBot.";
@@ -25,12 +27,12 @@ async function checkSpamStatus(account) {
 
         for (let attempt = 1; attempt <= MAX_SPAM_CHECK_RETRIES; attempt++) {
             console.log(`[Spam Check] Account ${account.phone}: Attempt ${attempt}/${MAX_SPAM_CHECK_RETRIES}...`);
-            await client.sendMessage('SpamInfoBot', { message: '/start' });
+            await client.sendMessage('SpamBot', { message: '/start' });
 
             // Wait a few seconds for the bot to reply
             await new Promise(resolve => setTimeout(resolve, 5000));
 
-            const history = await client.getMessages('SpamInfoBot', { limit: 1 });
+            const history = await client.getMessages('SpamBot', { limit: 1 });
             const botReply = history[0]?.message;
             lastKnownBotReply = botReply || lastKnownBotReply;
 
@@ -77,8 +79,11 @@ async function checkSpamStatus(account) {
  */
 async function sendMessage(account, targetUsername) {
     const session = new StringSession(account.sessionString);
-    const client = new TelegramClient(session, parseInt(account.apiId), account.apiHash, {});
-    const message = templates[Math.floor(Math.random() * templates.length)];
+    const client = new TelegramClient(session, parseInt(account.apiId), account.apiHash, {
+        timeout: 30000,
+        retryDelay: 1000
+    });
+    const message = template[Math.floor(Math.random() * template.length)];
 
     try {
         await client.connect();

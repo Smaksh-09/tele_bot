@@ -2,7 +2,7 @@ require('dotenv').config();
 const mongoose = require('mongoose');
 
 // Initialize the scheduler, which will start the cron job.
-require('./services/scheduler');
+require('./services/schedular');
 
 async function main() {
     if (!process.env.MONGODB_URI) {
