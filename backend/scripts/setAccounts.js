@@ -75,30 +75,41 @@ async function generateAndSaveSessions() {
     let successfulAccounts = 0;
     for (let i = 0; i < envAccounts.length; i++) {
         const { phone, apiId, apiHash } = envAccounts[i];
-        console.log(`\n--- Processing Account ${i + 1}/${envAccounts.length}: ${phone} ---`);
-
-        // Check if account with session already exists
-        const existingAccount = await TelegramAccount.findOne({ phone: phone });
-        if (existingAccount && existingAccount.sessionString) {
-            console.log(`Account ${phone} already has a session string in the database. Skipping.`);
-            continue;
-        }
-
-        const session = new StringSession(''); // Start with an empty session
-        const client = new TelegramClient(session, parseInt(apiId), apiHash, {
-            connectionRetries: 5,
-        });
-
+        
+        // This is the most important part - wrap everything in try...catch for each account
         try {
+            console.log(`\n--------------------------------------------------`);
+            console.log(`[Setup] Processing Account ${i + 1}/${envAccounts.length}: ${phone}`);
+
+            // Check if account with session already exists
+            const existingAccount = await TelegramAccount.findOne({ phone: phone });
+            if (existingAccount && existingAccount.sessionString) {
+                console.log(`[Setup] Account ${phone} already has a session string in the database. Skipping.`);
+                continue; // This skips to the next account in the loop
+            }
+
+            console.log(`[Setup] New account found. Starting interactive login for ${phone}.`);
+            console.log(`[Setup] IMPORTANT: Please be ready to enter the code within ~60 seconds to avoid a timeout.`);
+            
+            const session = new StringSession(''); // Start with an empty session
+            const client = new TelegramClient(session, parseInt(apiId), apiHash, {
+                connectionRetries: 3, // Reduced from 5 to 3 for faster failure detection
+            });
+
             await client.start({
                 phoneNumber: phone,
-                password: async () => await input.text('Please enter your 2FA password: '),
-                phoneCode: async () => await input.text('Please enter the code you received: '),
-                onError: (err) => console.log(err),
+                password: async () => await input.text('? Please enter your 2FA password: '),
+                phoneCode: async () => await input.text('? Please enter the code you received: '),
+                onError: (err) => console.error('[Telegram Error]', err),
             });
 
             const sessionString = client.session.save();
-            console.log('Login successful! Session string generated.');
+            console.log('[Setup] Login successful! Session string generated.');
+
+            // Ensure client is disconnected before saving to database
+            if(client.connected){
+                await client.disconnect();
+            }
 
             // Upsert the account data into the database
             // 'upsert' creates the document if it doesn't exist
@@ -115,32 +126,46 @@ async function generateAndSaveSessions() {
                 { upsert: true, new: true }
             );
 
-            console.log(`Successfully saved account ${phone} to the database.`);
+            console.log(`[Setup] SUCCESS! Account ${phone} has been authenticated and saved to the database.`);
             successfulAccounts++;
 
         } catch (error) {
-            console.error(`Failed to process account ${phone}. Error:`, error.message);
-        } finally {
-            // Ensure client is disconnected
-            if(client.connected){
-                await client.disconnect();
+            // If any error (including timeout) happens for one account, we catch it here.
+            console.error(`[Setup] FAILED to set up account ${phone}. Error: ${error.message}`);
+            console.error(`[Setup] This could be due to a timeout or incorrect credentials. Moving to the next account...`);
+            // The catch block prevents the script from crashing, and the for loop will continue.
+            
+            // Still try to disconnect the client if it exists
+            try {
+                if (typeof client !== 'undefined' && client.connected) {
+                    await client.disconnect();
+                }
+            } catch (disconnectError) {
+                console.error(`[Setup] Failed to disconnect client for ${phone}:`, disconnectError.message);
             }
         }
     }
 
     // After setting up accounts, initialize the AppState
+    console.log(`\n--------------------------------------------------`);
     if (successfulAccounts > 0) {
         await AppState.findOneAndUpdate(
             { singletonKey: 'main' },
             { nextAccountIndex: 0 },
             { upsert: true }
         );
-        console.log('\nApplication state initialized. Bot is ready to start with account index 0.');
+        console.log(`[Setup] Application state initialized. Bot is ready to start with account index 0.`);
+        console.log(`[Setup] Successfully processed ${successfulAccounts}/${envAccounts.length} accounts.`);
+    } else {
+        console.log(`[Setup] WARNING: No accounts were successfully processed. Please check your credentials and try again.`);
     }
 
-
     await mongoose.disconnect();
-    console.log('\nSetup complete. Disconnected from MongoDB.');
+    console.log('[Setup] Setup complete. Disconnected from MongoDB.');
 }
 
-generateAndSaveSessions().catch(console.error);
+// Enhanced error handling for the main function
+generateAndSaveSessions().catch(error => {
+    console.error('[Setup] CRITICAL: An unexpected error occurred in the main function:', error);
+    process.exit(1);
+});
