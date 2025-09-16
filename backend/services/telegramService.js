@@ -72,32 +72,41 @@ async function checkSpamStatus(account) {
 
 
 /**
- * Sends a single message to a target user.
+ * Creates a Telegram client for an account.
  * @param {object} account - The Mongoose document for the Telegram account.
- * @param {string} targetUsername - The username of the recipient.
- * @returns {Promise<{success: boolean, errorType?: 'limited' | 'generic'}>}
+ * @returns {TelegramClient} The created client.
  */
-async function sendMessage(account, targetUsername) {
+function createClient(account) {
     const session = new StringSession(account.sessionString);
-    const client = new TelegramClient(session, parseInt(account.apiId), account.apiHash, {
+    return new TelegramClient(session, parseInt(account.apiId), account.apiHash, {
+        connectionRetries: 3,
         timeout: 30000,
         retryDelay: 1000
     });
+}
+
+/**
+ * Sends a single message to a target user using an existing client.
+ * @param {TelegramClient} client - The connected Telegram client.
+ * @param {string} targetUsername - The username of the recipient.
+ * @returns {Promise<{success: boolean, errorType?: 'limited' | 'invalid_username' | 'generic'}>}
+ */
+async function sendMessage(client, targetUsername) {
     const message = template[Math.floor(Math.random() * template.length)];
 
     try {
-        await client.connect();
         await client.sendMessage(targetUsername, { message });
         return { success: true };
     } catch (error) {
-        console.error(`Failed to send message from ${account.phone} to ${targetUsername}:`, error.constructor.name);
+        console.error(`Failed to send message to ${targetUsername}:`, error.constructor.name);
         if (error.constructor.name === 'FloodWaitError' || error.errorMessage === 'PEER_FLOOD') {
             return { success: false, errorType: 'limited' };
         }
+        if (error.errorMessage && (error.errorMessage.includes('USERNAME_INVALID') || error.errorMessage.includes('USER_ID_INVALID'))) {
+            return { success: false, errorType: 'invalid_username' };
+        }
         return { success: false, errorType: 'generic' };
-    } finally {
-        await client.disconnect();
     }
 }
 
-module.exports = { checkSpamStatus, sendMessage };
+module.exports = { checkSpamStatus, sendMessage, createClient };

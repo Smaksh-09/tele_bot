@@ -20,7 +20,7 @@ const targetUserSchema = new mongoose.Schema({
     },
     status: {
         type: String,
-        enum: ['active', 'blocked', 'invalid'],
+        enum: ['active', 'messaged', 'blocked', 'invalid', 'invalid_username'],
         default: 'active'
     }
 });
