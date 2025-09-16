@@ -100,11 +100,12 @@ function startScheduler() {
         await runSchedulerJob().catch(error => {
             console.error('[Scheduler] CRITICAL UNHANDLED ERROR in hourly job:', error);
         });
+    }, {
+        timezone: "Asia/Kolkata"
     });
 
-    // Optional: Run a job on startup for immediate testing.
-    // console.log('[Scheduler] Running one job immediately on startup...');
-    // runSchedulerJob().catch(error => console.error('[Scheduler] CRITICAL UNHANDLED ERROR in startup job:', error));
+    console.log('[Scheduler] Running one job immediately on startup...');
+    runSchedulerJob().catch(error => console.error('[Scheduler] CRITICAL UNHANDLED ERROR in startup job:', error));
 }
 
 
