@@ -40,12 +40,11 @@ async function importUsers() {
         skip_empty_lines: true
     }));
 
-    let successfulImports = 0;
-    let duplicateSkips = 0;
+    const usersToInsert = [];
     
-    console.log('Reading CSV and importing users...');
+    console.log('Reading all users from CSV file into memory...');
     
-    // 3. Process each row from the CSV
+    // 3. Process each row from the CSV and collect users for bulk insert
     for await (const row of parser) {
         const username = row[USERNAME_COLUMN_HEADER];
         if (!username) {
@@ -53,19 +52,44 @@ async function importUsers() {
             continue;
         }
 
+        // Add user to bulk insert array instead of saving individually
+        usersToInsert.push({ username: username.trim() });
+    }
+
+    console.log(`Finished reading. Found ${usersToInsert.length} users to import.`);
+
+    let successfulImports = 0;
+    let duplicateSkips = 0;
+
+    if (usersToInsert.length > 0) {
         try {
-            // Check if user already exists
-            const existingUser = await TargetUser.findOne({ username: username.trim() });
-            if (existingUser) {
-                duplicateSkips++;
-            } else {
-                // Create and save the new user
-                const user = new TargetUser({ username: username.trim() });
-                await user.save();
-                successfulImports++;
-            }
+            console.log('Starting bulk import into MongoDB. This may take a moment...');
+            
+            // Use insertMany() for fast bulk operations
+            // 'ordered: false' allows MongoDB to insert all valid users and skip duplicates
+            // without stopping the entire operation
+            const result = await TargetUser.insertMany(usersToInsert, { ordered: false });
+            
+            successfulImports = result.length;
+            duplicateSkips = usersToInsert.length - result.length;
+            
+            console.log('SUCCESS! Bulk import complete.');
         } catch (error) {
-            console.error(`Failed to import user '${username}':`, error);
+            // Handle bulk insert errors
+            if (error.code === 11000) {
+                // Duplicate key error - extract successful inserts from error details
+                const insertedCount = error.result ? error.result.insertedCount : 0;
+                successfulImports = insertedCount;
+                duplicateSkips = usersToInsert.length - insertedCount;
+                console.log('Import finished, but some users were duplicates and were skipped (which is normal).');
+            } else {
+                console.error('An error occurred during the bulk import:', error);
+                // If we have writeErrors, count successful inserts
+                if (error.writeErrors) {
+                    successfulImports = usersToInsert.length - error.writeErrors.length;
+                    duplicateSkips = error.writeErrors.length;
+                }
+            }
         }
     }
 
