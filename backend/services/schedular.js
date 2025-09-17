@@ -52,36 +52,75 @@ async function runSchedulerJob() {
         await Account.updateOne({ _id: account._id }, { status: 'limited', statusMessage: statusResult.message });
     } else {
         await Account.updateOne({ _id: account._id }, { status: 'healthy', statusMessage: statusResult.message });
+        console.log(`[DEBUG] Querying for active users with limit ${MESSAGES_PER_HOUR}...`);
         const targets = await TargetUser.find({ status: 'active' }).limit(MESSAGES_PER_HOUR);
+        console.log(`[DEBUG] Database query completed. Found ${targets.length} active users.`);
 
         if (targets.length === 0) {
             console.log('[Scheduler] No active users left to message!');
+            
+            // Let's check what users we do have
+            const totalUsers = await TargetUser.countDocuments();
+            const userStatusCounts = await TargetUser.aggregate([
+                { $group: { _id: "$status", count: { $sum: 1 } } }
+            ]);
+            console.log(`[DEBUG] Total users in database: ${totalUsers}`);
+            console.log(`[DEBUG] User status breakdown:`, userStatusCounts);
         } else {
             console.log(`[Scheduler] Account ${sanitizedPhone} is healthy. Sending ${targets.length} messages.`);
+            console.log(`[DEBUG] Target users found:`, targets.map(t => ({ id: t._id, username: t.username, status: t.status })));
+            
             const delayBetweenMessages = (3600 / MESSAGES_PER_HOUR) * 1000;
+            console.log(`[DEBUG] Delay between messages: ${delayBetweenMessages}ms`);
+            
             const client = telegramService.createClient(account);
+            console.log(`[DEBUG] Created client for account ${sanitizedPhone}`);
+            
             try {
+                console.log(`[DEBUG] Attempting to connect client...`);
                 await client.connect();
-                for (const target of targets) {
-                    const result = await telegramService.sendMessage(client, target.username);
-                    if (result.success) {
-                        await TargetUser.updateOne({ _id: target._id }, { status: 'messaged', lastMessageSentAt: new Date(), $inc: { messageCount: 1 } });
-                        console.log(`Sent to ${target.username}. Marked as 'messaged'.`);
-                    } else {
-                        if (result.errorType === 'invalid_username') {
-                            await TargetUser.updateOne({ _id: target._id }, { status: 'invalid_username' });
+                console.log(`[DEBUG] Client connected successfully. Starting message loop...`);
+                
+                for (let i = 0; i < targets.length; i++) {
+                    const target = targets[i];
+                    console.log(`[DEBUG] Processing target ${i + 1}/${targets.length}: ${target.username}`);
+                    
+                    try {
+                        const result = await telegramService.sendMessage(client, target.username);
+                        console.log(`[DEBUG] Send message result for ${target.username}:`, result);
+                        
+                        if (result.success) {
+                            await TargetUser.updateOne({ _id: target._id }, { status: 'messaged', lastMessageSentAt: new Date(), $inc: { messageCount: 1 } });
+                            console.log(`[SUCCESS] Sent to ${target.username}. Marked as 'messaged'.`);
+                        } else {
+                            console.log(`[FAILED] Failed to send to ${target.username}. Error type: ${result.errorType}`);
+                            if (result.errorType === 'invalid_username') {
+                                await TargetUser.updateOne({ _id: target._id }, { status: 'invalid_username' });
+                                console.log(`[DEBUG] Marked ${target.username} as invalid_username`);
+                            }
+                            if (result.errorType === 'limited') {
+                                console.warn(`[Scheduler] Hit PEER_FLOOD error. Stopping sends for this hour.`);
+                                await Account.updateOne({ _id: account._id }, { status: 'limited', statusMessage: 'Stopped due to PEER_FLOOD' });
+                                break;
+                            }
                         }
-                        if (result.errorType === 'limited') {
-                            console.warn(`[Scheduler] Hit PEER_FLOOD error. Stopping sends for this hour.`);
-                            await Account.updateOne({ _id: account._id }, { status: 'limited', statusMessage: 'Stopped due to PEER_FLOOD' });
-                            break;
-                        }
+                    } catch (error) {
+                        console.error(`[ERROR] Exception while processing target ${target.username}:`, error);
                     }
+                    
+                    console.log(`[DEBUG] Waiting ${delayBetweenMessages}ms before next message...`);
                     await new Promise(resolve => setTimeout(resolve, delayBetweenMessages));
                 }
+                console.log(`[DEBUG] Finished processing all targets`);
+            } catch (error) {
+                console.error(`[ERROR] Exception in message sending loop:`, error);
             } finally {
+                console.log(`[DEBUG] Disconnecting client...`);
                 if (client.connected) {
                     await client.disconnect();
+                    console.log(`[DEBUG] Client disconnected`);
+                } else {
+                    console.log(`[DEBUG] Client was not connected, skipping disconnect`);
                 }
             }
         }

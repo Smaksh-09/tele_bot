@@ -92,19 +92,43 @@ function createClient(account) {
  * @returns {Promise<{success: boolean, errorType?: 'limited' | 'invalid_username' | 'generic'}>}
  */
 async function sendMessage(client, targetUsername) {
+    console.log(`[TelegramService] Starting sendMessage to ${targetUsername}`);
+    
+    if (!client) {
+        console.error(`[TelegramService] ERROR: No client provided`);
+        return { success: false, errorType: 'generic' };
+    }
+    
+    if (!client.connected) {
+        console.error(`[TelegramService] ERROR: Client is not connected`);
+        return { success: false, errorType: 'generic' };
+    }
+    
     const message = template[Math.floor(Math.random() * template.length)];
+    console.log(`[TelegramService] Selected message template: "${message.substring(0, 50)}..."`);
+    console.log(`[TelegramService] Target username: "${targetUsername}"`);
 
     try {
+        console.log(`[TelegramService] Sending message to ${targetUsername}...`);
         await client.sendMessage(targetUsername, { message });
+        console.log(`[TelegramService] SUCCESS: Message sent to ${targetUsername}`);
         return { success: true };
     } catch (error) {
-        console.error(`Failed to send message to ${targetUsername}:`, error.constructor.name);
+        console.error(`[TelegramService] FAILED to send message to ${targetUsername}:`);
+        console.error(`[TelegramService] Error name: ${error.constructor.name}`);
+        console.error(`[TelegramService] Error message: ${error.message}`);
+        console.error(`[TelegramService] Error code: ${error.code}`);
+        console.error(`[TelegramService] Error details:`, error);
+        
         if (error.constructor.name === 'FloodWaitError' || error.errorMessage === 'PEER_FLOOD') {
+            console.log(`[TelegramService] Detected flood/rate limit error`);
             return { success: false, errorType: 'limited' };
         }
         if (error.errorMessage && (error.errorMessage.includes('USERNAME_INVALID') || error.errorMessage.includes('USER_ID_INVALID'))) {
+            console.log(`[TelegramService] Detected invalid username error`);
             return { success: false, errorType: 'invalid_username' };
         }
+        console.log(`[TelegramService] Treating as generic error`);
         return { success: false, errorType: 'generic' };
     }
 }
