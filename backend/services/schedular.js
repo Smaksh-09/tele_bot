@@ -6,6 +6,9 @@ const telegramService = require('./telegramService');
 
 const MESSAGES_PER_SESSION = 20; // Stop after 20 DMs per session
 
+// Session management
+let isSessionRunning = false;
+
 // Function to get random delay between 5-7 minutes
 function getRandomDelay() {
     const minDelay = 5 * 60 * 1000; // 5 minutes in milliseconds
@@ -28,6 +31,16 @@ function sanitizePhoneNumber(phone) {
 
 async function runSchedulerJob() {
     console.log(`[Scheduler] Waking up for the job at ${new Date().toLocaleString()}.`);
+    
+    // Check if a session is already running
+    if (isSessionRunning) {
+        console.log(`[Scheduler] ⚠️  SKIPPING: A DM session is already in progress. Will try again next hour.`);
+        return;
+    }
+    
+    // Mark session as running
+    isSessionRunning = true;
+    console.log(`[Scheduler] 🚀 Starting new DM session...`);
 
     let state = await AppState.findOne();
     if (!state) {
@@ -60,6 +73,7 @@ async function runSchedulerJob() {
     if (statusResult.status === 'limited') {
         console.log(`[Scheduler] Account ${sanitizedPhone} is limited. Final status: ${statusResult.message}`);
         await Account.updateOne({ _id: account._id }, { status: 'limited', statusMessage: statusResult.message });
+        isSessionRunning = false; // Reset session flag
     } else {
         await Account.updateOne({ _id: account._id }, { status: 'healthy', statusMessage: statusResult.message });
         console.log(`[DEBUG] Querying for active users with limit ${MESSAGES_PER_SESSION}...`);
@@ -76,6 +90,7 @@ async function runSchedulerJob() {
             ]);
             console.log(`[DEBUG] Total users in database: ${totalUsers}`);
             console.log(`[DEBUG] User status breakdown:`, userStatusCounts);
+            isSessionRunning = false; // Reset session flag
         } else {
             console.log(`[Scheduler] Account ${sanitizedPhone} is healthy. Sending ${targets.length} messages.`);
             console.log(`[DEBUG] Target users found:`, targets.map(t => ({ id: t._id, username: t.username, status: t.status })));
@@ -107,6 +122,7 @@ async function runSchedulerJob() {
                             if (messagesSent >= MESSAGES_PER_SESSION) {
                                 console.log(`[Scheduler] ✅ REACHED LIMIT: ${MESSAGES_PER_SESSION} messages sent successfully. Stopping bot session.`);
                                 console.log(`[Scheduler] 🛑 Bot will need to be manually restarted for next session.`);
+                                isSessionRunning = false; // Reset session flag before exit
                                 process.exit(0); // Gracefully stop the bot
                             }
                         } else {
@@ -118,6 +134,7 @@ async function runSchedulerJob() {
                             if (result.errorType === 'limited') {
                                 console.warn(`[Scheduler] Hit PEER_FLOOD error. Stopping sends for this session.`);
                                 await Account.updateOne({ _id: account._id }, { status: 'limited', statusMessage: 'Stopped due to PEER_FLOOD' });
+                                isSessionRunning = false; // Reset session flag
                                 break;
                             }
                         }
@@ -147,6 +164,9 @@ async function runSchedulerJob() {
         }
     }
 
+    // Reset session flag when job completes (for any reason)
+    isSessionRunning = false;
+    
     state.nextAccountIndex = (accountIndexToUse + 1) % totalAccounts;
     await state.save();
     console.log(`[Scheduler] Job finished. Next account index is now #${state.nextAccountIndex}.`);
