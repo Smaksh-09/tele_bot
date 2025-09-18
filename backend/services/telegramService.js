@@ -25,6 +25,16 @@ function loadProxies() {
                 };
             });
         console.log(`[ProxyManager] Loaded ${proxies.length} proxies`);
+        
+        // Show first proxy as example of parsing
+        if (proxies.length > 0) {
+            const firstProxy = proxies[0];
+            console.log(`[ProxyManager] 🔍 First proxy parsed as:`);
+            console.log(`[ProxyManager]   Host: ${firstProxy.host}`);
+            console.log(`[ProxyManager]   Port: ${firstProxy.port}`);
+            console.log(`[ProxyManager]   Username: ${firstProxy.username}`);
+            console.log(`[ProxyManager]   Password: ${firstProxy.password ? firstProxy.password.substring(0, 3) + '***' : 'none'}`);
+        }
     } catch (error) {
         console.error('[ProxyManager] Error loading proxies:', error);
         proxies = [];
@@ -185,6 +195,13 @@ function createClient(account) {
         };
         console.log(`[TelegramService] ✅ PROXY CONFIGURED: ${proxy.host}:${proxy.port} (SOCKS5) for account ${account.accountIndex}`);
         console.log(`[TelegramService] 🔐 Proxy auth: ${proxy.username}:${proxy.password ? '***' : 'no password'}`);
+        console.log(`[TelegramService] 🔧 Final proxy object:`, JSON.stringify({
+            ip: proxy.host,
+            port: proxy.port,
+            username: proxy.username,
+            password: proxy.password ? '***' : 'none',
+            socksType: 5
+        }));
     } else {
         console.log(`[TelegramService] ⚠️  NO PROXY: Direct connection for account ${account.accountIndex}`);
     }
