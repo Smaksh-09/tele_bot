@@ -1,6 +1,67 @@
 const { TelegramClient } = require('telegram');
 const { StringSession } = require('telegram/sessions');
+const { SocksProxyAgent } = require('socks-proxy-agent');
 const template = require('../config/template');
+const fs = require('fs');
+const path = require('path');
+
+// Proxy management
+let proxies = [];
+let proxyIndex = 0;
+
+// Load proxies from file
+function loadProxies() {
+    try {
+        const proxyFile = path.join(__dirname, '../proxies/proxies__.txt');
+        const proxyData = fs.readFileSync(proxyFile, 'utf8');
+        proxies = proxyData.split('\n')
+            .filter(line => line.trim())
+            .map(line => {
+                const [host, port, username, password] = line.trim().split(':');
+                return {
+                    host,
+                    port: parseInt(port),
+                    username,
+                    password
+                };
+            });
+        console.log(`[ProxyManager] Loaded ${proxies.length} proxies`);
+    } catch (error) {
+        console.error('[ProxyManager] Error loading proxies:', error);
+        proxies = [];
+    }
+}
+
+// Get proxy for account based on account index
+function getProxyForAccount(accountIndex) {
+    if (proxies.length === 0) {
+        loadProxies();
+    }
+    
+    if (proxies.length === 0) {
+        console.warn('[ProxyManager] No proxies available, using direct connection');
+        return null;
+    }
+    
+    // Assign proxy based on account index (round-robin)
+    const proxyIndex = accountIndex % proxies.length;
+    const proxy = proxies[proxyIndex];
+    console.log(`[ProxyManager] Assigned proxy ${proxyIndex + 1}/${proxies.length} (${proxy.host}:${proxy.port}) to account index ${accountIndex}`);
+    return proxy;
+}
+
+// Initialize proxies on startup
+loadProxies();
+
+// Log proxy assignments for accounts
+if (proxies.length > 0) {
+    console.log(`[ProxyManager] Proxy assignments will be:`);
+    for (let i = 0; i < 20; i++) { // Assuming 20 accounts (0-19)
+        const proxyIndex = i % proxies.length;
+        const proxy = proxies[proxyIndex];
+        console.log(`[ProxyManager] Account ${i} -> Proxy ${proxyIndex + 1} (${proxy.host}:${proxy.port})`);
+    }
+}
 
 // --- Configuration for the Spam Check ---
 const MAX_SPAM_CHECK_RETRIES = 5;
@@ -14,11 +75,22 @@ const SPAM_CHECK_RETRY_DELAY_MS = 10000; // 10 seconds between retries
  */
 async function checkSpamStatus(account) {
     const session = new StringSession(account.sessionString);
-    const client = new TelegramClient(session, parseInt(account.apiId), account.apiHash, {
+    const proxy = getProxyForAccount(account.accountIndex);
+    
+    const clientOptions = {
         connectionRetries: 3,
         timeout: 30000,
         retryDelay: 1000
-    });
+    };
+    
+    // Add proxy configuration if available
+    if (proxy) {
+        const proxyUrl = `socks5://${proxy.username}:${proxy.password}@${proxy.host}:${proxy.port}`;
+        clientOptions.agent = new SocksProxyAgent(proxyUrl);
+        console.log(`[SpamCheck] Using proxy ${proxy.host}:${proxy.port} for account ${account.accountIndex}`);
+    }
+    
+    const client = new TelegramClient(session, parseInt(account.apiId), account.apiHash, clientOptions);
     
     let lastKnownBotReply = "No reply received from SpamInfoBot.";
 
@@ -72,18 +144,34 @@ async function checkSpamStatus(account) {
 
 
 /**
- * Creates a Telegram client for an account.
+ * Creates a Telegram client for an account with proxy support.
  * @param {object} account - The Mongoose document for the Telegram account.
  * @returns {TelegramClient} The created client.
  */
 function createClient(account) {
     const session = new StringSession(account.sessionString);
-    return new TelegramClient(session, parseInt(account.apiId), account.apiHash, {
+    const proxy = getProxyForAccount(account.accountIndex);
+    
+    const clientOptions = {
         connectionRetries: 3,
         timeout: 30000,
         retryDelay: 1000
-    });
+    };
+    
+    // Add proxy configuration if available
+    if (proxy) {
+        const proxyUrl = `socks5://${proxy.username}:${proxy.password}@${proxy.host}:${proxy.port}`;
+        clientOptions.agent = new SocksProxyAgent(proxyUrl);
+        console.log(`[TelegramService] Creating client with proxy ${proxy.host}:${proxy.port} for account ${account.accountIndex}`);
+    } else {
+        console.log(`[TelegramService] Creating client without proxy for account ${account.accountIndex}`);
+    }
+    
+    return new TelegramClient(session, parseInt(account.apiId), account.apiHash, clientOptions);
 }
+
+// Template rotation counter
+let templateIndex = 0;
 
 /**
  * Sends a single message to a target user using an existing client.
@@ -104,8 +192,10 @@ async function sendMessage(client, targetUsername) {
         return { success: false, errorType: 'generic' };
     }
     
-    const message = template[Math.floor(Math.random() * template.length)];
-    console.log(`[TelegramService] Selected message template: "${message.substring(0, 50)}..."`);
+    // Rotate through templates sequentially for better variety
+    const message = template[templateIndex % template.length];
+    templateIndex++;
+    console.log(`[TelegramService] Selected template ${((templateIndex - 1) % template.length) + 1}/${template.length}: "${message.substring(0, 80)}..."`);
     console.log(`[TelegramService] Target username: "${targetUsername}"`);
 
     try {

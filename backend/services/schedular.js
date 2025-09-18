@@ -4,7 +4,17 @@ const AppState = require('../models/AppState');
 const TargetUser = require('../models/TargetUser');
 const telegramService = require('./telegramService');
 
-const MESSAGES_PER_HOUR = 50;
+const MESSAGES_PER_SESSION = 20; // Stop after 20 DMs per session
+
+// Function to get random delay between 5-7 minutes
+function getRandomDelay() {
+    const minDelay = 5 * 60 * 1000; // 5 minutes in milliseconds
+    const maxDelay = 7 * 60 * 1000; // 7 minutes in milliseconds
+    const randomDelay = Math.floor(Math.random() * (maxDelay - minDelay + 1)) + minDelay;
+    const delayInMinutes = (randomDelay / 1000 / 60).toFixed(1);
+    console.log(`[Scheduler] Random delay selected: ${delayInMinutes} minutes (${randomDelay}ms)`);
+    return randomDelay;
+}
 
 /**
  * Sanitizes a phone number for safe logging.
@@ -52,8 +62,8 @@ async function runSchedulerJob() {
         await Account.updateOne({ _id: account._id }, { status: 'limited', statusMessage: statusResult.message });
     } else {
         await Account.updateOne({ _id: account._id }, { status: 'healthy', statusMessage: statusResult.message });
-        console.log(`[DEBUG] Querying for active users with limit ${MESSAGES_PER_HOUR}...`);
-        const targets = await TargetUser.find({ status: 'active' }).limit(MESSAGES_PER_HOUR);
+        console.log(`[DEBUG] Querying for active users with limit ${MESSAGES_PER_SESSION}...`);
+        const targets = await TargetUser.find({ status: 'active' }).limit(MESSAGES_PER_SESSION);
         console.log(`[DEBUG] Database query completed. Found ${targets.length} active users.`);
 
         if (targets.length === 0) {
@@ -70,9 +80,6 @@ async function runSchedulerJob() {
             console.log(`[Scheduler] Account ${sanitizedPhone} is healthy. Sending ${targets.length} messages.`);
             console.log(`[DEBUG] Target users found:`, targets.map(t => ({ id: t._id, username: t.username, status: t.status })));
             
-            const delayBetweenMessages = (3600 / MESSAGES_PER_HOUR) * 1000;
-            console.log(`[DEBUG] Delay between messages: ${delayBetweenMessages}ms`);
-            
             const client = telegramService.createClient(account);
             console.log(`[DEBUG] Created client for account ${sanitizedPhone}`);
             
@@ -80,6 +87,8 @@ async function runSchedulerJob() {
                 console.log(`[DEBUG] Attempting to connect client...`);
                 await client.connect();
                 console.log(`[DEBUG] Client connected successfully. Starting message loop...`);
+                
+                let messagesSent = 0;
                 
                 for (let i = 0; i < targets.length; i++) {
                     const target = targets[i];
@@ -90,8 +99,16 @@ async function runSchedulerJob() {
                         console.log(`[DEBUG] Send message result for ${target.username}:`, result);
                         
                         if (result.success) {
+                            messagesSent++;
                             await TargetUser.updateOne({ _id: target._id }, { status: 'messaged', lastMessageSentAt: new Date(), $inc: { messageCount: 1 } });
-                            console.log(`[SUCCESS] Sent to ${target.username}. Marked as 'messaged'.`);
+                            console.log(`[SUCCESS] Sent message ${messagesSent}/${MESSAGES_PER_SESSION} to ${target.username}. Marked as 'messaged'.`);
+                            
+                            // Check if we've reached the 20 DM limit
+                            if (messagesSent >= MESSAGES_PER_SESSION) {
+                                console.log(`[Scheduler] ✅ REACHED LIMIT: ${MESSAGES_PER_SESSION} messages sent successfully. Stopping bot session.`);
+                                console.log(`[Scheduler] 🛑 Bot will need to be manually restarted for next session.`);
+                                process.exit(0); // Gracefully stop the bot
+                            }
                         } else {
                             console.log(`[FAILED] Failed to send to ${target.username}. Error type: ${result.errorType}`);
                             if (result.errorType === 'invalid_username') {
@@ -99,7 +116,7 @@ async function runSchedulerJob() {
                                 console.log(`[DEBUG] Marked ${target.username} as invalid_username`);
                             }
                             if (result.errorType === 'limited') {
-                                console.warn(`[Scheduler] Hit PEER_FLOOD error. Stopping sends for this hour.`);
+                                console.warn(`[Scheduler] Hit PEER_FLOOD error. Stopping sends for this session.`);
                                 await Account.updateOne({ _id: account._id }, { status: 'limited', statusMessage: 'Stopped due to PEER_FLOOD' });
                                 break;
                             }
@@ -108,10 +125,14 @@ async function runSchedulerJob() {
                         console.error(`[ERROR] Exception while processing target ${target.username}:`, error);
                     }
                     
-                    console.log(`[DEBUG] Waiting ${delayBetweenMessages}ms before next message...`);
-                    await new Promise(resolve => setTimeout(resolve, delayBetweenMessages));
+                    // Only add delay if not the last message and not reached limit
+                    if (i < targets.length - 1 && messagesSent < MESSAGES_PER_SESSION) {
+                        const randomDelay = getRandomDelay();
+                        console.log(`[DEBUG] Waiting ${(randomDelay / 1000 / 60).toFixed(1)} minutes before next message...`);
+                        await new Promise(resolve => setTimeout(resolve, randomDelay));
+                    }
                 }
-                console.log(`[DEBUG] Finished processing all targets`);
+                console.log(`[DEBUG] Finished processing all targets. Total messages sent: ${messagesSent}`);
             } catch (error) {
                 console.error(`[ERROR] Exception in message sending loop:`, error);
             } finally {
