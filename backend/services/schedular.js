@@ -100,8 +100,13 @@ async function runSchedulerJob() {
             
             try {
                 console.log(`[DEBUG] Attempting to connect client...`);
+                console.log(`[DEBUG] 🔧 Client proxy config:`, client._clientOptions?.proxy ? 'ENABLED' : 'DISABLED');
+                if (client._clientOptions?.proxy) {
+                    console.log(`[DEBUG] 🔗 Proxy details: ${client._clientOptions.proxy.ip}:${client._clientOptions.proxy.port}`);
+                }
                 await client.connect();
-                console.log(`[DEBUG] Client connected successfully. Starting message loop...`);
+                console.log(`[DEBUG] ✅ Client connected successfully. Starting message loop...`);
+                console.log(`[DEBUG] 🌐 Connection established through ${client._clientOptions?.proxy ? 'PROXY' : 'DIRECT'} connection.`);
                 
                 let messagesSent = 0;
                 
